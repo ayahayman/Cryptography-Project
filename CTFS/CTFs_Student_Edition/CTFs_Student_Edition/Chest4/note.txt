@@ -1,0 +1,5 @@
+[mechanical puppet voice, slow and deliberate]
+
+Hello. I want to play a game. Before you lies a simple test of your skills. A program that guards its secret behind a wall of code. It asks for a password - one that is hidden within its very structure. You may use whatever tools you possess, but know this: only those who choose to reveal the program's inner workings through Ghidra will discover the truth.
+First, you must locate the main function - the heart of this twisted creation. Then, follow the digital breadcrumbs to the check_pw function where truth awaits. Keep the ASCII table as your guide through this labyrinth of bytes and characters.
+The choice is yours. Will you take the easy path and fail? Or will you peel back the layers to expose what lies beneath? Live or die. Decompile... or be denied. Let the game begin.
