@@ -25,7 +25,7 @@ if platform.system() == "Windows":
         "C:\\Program Files",
         os.path.expandvars("%APPDATA%")
     ]
-    DEFAULT_PATH = "C:\\TestFolder"
+    DEFAULT_PATH = "D:\\Ziad\\university\\Year 4\\security\\project"
 else:
     WHITELISTED_PROCESSES = ['launchd', 'WindowServer', 'kernel_task', 'loginwindow', 'python3', 'python3.12']
     CRITICAL_PATHS = [
@@ -42,7 +42,7 @@ MASS_FILE_CREATE_THRESHOLD = 30
 BIG_SCORE_FOR_MASS_WRITE = 5
 MASS_FILE_DELETION_THRESHOLD = 30
 BIG_SCORE_FOR_MASS_DELETION = 5
-OUTBOUND_NETWORK_SPIKE = 50_000_000  # 50 MB
+OUTBOUND_NETWORK_SPIKE = 100_000_000  # 50 MB
 
 test_mode = False
 
@@ -80,6 +80,7 @@ def check_score_threshold(pid, name):
         if not test_mode:
             try:
                 psutil.Process(pid).kill()
+                print(f"[!!!] Killed process {name} (PID {pid})")
             except Exception:
                 pass
 
@@ -186,12 +187,11 @@ def monitor_network_usage():
             if proc.info['name'] in WHITELISTED_PROCESSES:
                 continue
             io = proc.io_counters()
-            if hasattr(io, 'other') and io.other > OUTBOUND_NETWORK_SPIKE:
+            if io.write_bytes > OUTBOUND_NETWORK_SPIKE:  # Use write_bytes on Windows
                 print(f"[!!!] High outbound traffic from {proc.info['name']} (PID {proc.pid})")
                 process_scores[proc.pid] += 8
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
             continue
-
 def show_top_suspects():
     top = sorted(process_scores.items(), key=lambda x: x[1], reverse=True)[:5]
     print("\n[Live Dashboard] Top Suspicious Processes:")
