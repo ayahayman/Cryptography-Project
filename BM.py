@@ -10,6 +10,8 @@ import os
 import stat
 import platform
 import subprocess
+import tkinter as tk  # Import tkinter for GUI
+from PIL import Image  # Import Pillow for image handling
 
 # === Settings ===
 SUSPICIOUS_EXTENSIONS = ['.locked', '.encrypted', '.payforunlock', '.enc']
@@ -58,6 +60,8 @@ process_net_usage = defaultdict(lambda: {'sent': 0, 'recv': 0})
 last_mass_check_time = time.time()
 deletion_check_time = time.time()
 recently_created_files = set()  # Track recently created files
+last_score_reset_time = time.time()  # Track the last score reset time
+alerted_processes = set()  # Track processes that have already triggered an alert
 
 def calculate_entropy(file_path):
     try:
@@ -77,6 +81,23 @@ def log_alert(message):
     with open("alerts.log", "a") as log:
         log.write(f"{time.ctime()}: {message}\n")
 
+def show_image_alert(pid, image_path):
+    """Display an image alert when a process exceeds the threshold."""
+    if pid in alerted_processes:
+        return 
+    alerted_processes.add(pid)  
+
+    try:
+        abs_image_path = os.path.abspath(image_path)
+        print(f"[DEBUG] Attempting to open image: {abs_image_path}")
+        img = Image.open(abs_image_path)
+        img.show()
+        print(f"[DEBUG] Image displayed successfully.")
+    except FileNotFoundError:
+        print(f"[ERROR] Image not found at path: {abs_image_path}")
+    except Exception as e:
+        print(f"[ERROR] Failed to display image: {e}")
+
 def check_score_threshold(pid, name):
     if process_safe_creation[pid]:  
         return
@@ -88,8 +109,9 @@ def check_score_threshold(pid, name):
             try:
                 psutil.Process(pid).kill()
             except Exception:
-                pass
-            
+                print(f"[!!!] Failed to kill process {name} (PID {pid}).")
+                show_image_alert(pid, "/Users/maryamhabeb/Desktop/security_project/Cryptography-Project/img.JPG")  # Show image alert
+
 def is_gibberish(name):
     base = os.path.basename(name).split('.')[0]
     return bool(re.fullmatch(r'[a-zA-Z0-9]{8,}', base))
@@ -141,7 +163,7 @@ class FileEventHandler(FileSystemEventHandler):
                 continue
 
         self.check_mass_file_creation()
-        recently_created_files.add(event.src_path)  # Mark file as recently created
+        recently_created_files.add(event.src_path)  
 
     def on_deleted(self, event):
         for proc in psutil.process_iter(['pid', 'name']):
@@ -178,7 +200,7 @@ class FileEventHandler(FileSystemEventHandler):
 
                   
                     process_scores[pid] += 4
-                    process_safe_creation[pid] = False  # Mark as unsafe
+                    process_safe_creation[pid] = False  
                     check_score_threshold(pid, name)
                     break  
                 except Exception:
@@ -188,12 +210,13 @@ class FileEventHandler(FileSystemEventHandler):
         if event.is_directory:
             return  
 
-        # Skip if the file was recently created
+     
         if event.src_path in recently_created_files:
-            recently_created_files.remove(event.src_path)  # Remove from recently created
+            recently_created_files.remove(event.src_path) 
             return
 
         print(f"[!] File modified: {event.src_path}")
+        
         entropy = calculate_entropy(event.src_path)
         print(f"[*] Entropy of modified file {event.src_path}: {entropy:.2f}")
 
@@ -201,13 +224,16 @@ class FileEventHandler(FileSystemEventHandler):
             try:
                 pid = proc.info['pid']
                 name = proc.info['name']
+                
                 if name in WHITELISTED_PROCESSES:
                     continue
 
                 if entropy > 5:
                     print(f"[!!!] High entropy modification detected in {event.src_path} by {name} (PID {pid})")
-                    process_scores[pid] += 5  # Higher score for high-entropy modifications
+                    process_scores[pid] += 5  
+                    process_safe_creation[pid] = False  
                     check_score_threshold(pid, name)
+                   
                 break
             except Exception:
                 continue
@@ -281,7 +307,7 @@ def list_services():
             output = subprocess.check_output("wmic service get Name,DisplayName", shell=True).decode()
             return set(line.strip() for line in output.split("\n")[1:] if line.strip())
         else:
-            output = subprocess.check_output("launchctl list", shell=True).decode()  # macOS
+            output = subprocess.check_output("launchctl list", shell=True).decode() 
             return set(line.split()[0] for line in output.split("\n")[1:] if line.strip())
     except Exception as e:
         print(f"[ERROR] Failed to list services: {e}")
@@ -344,6 +370,16 @@ def show_top_suspects():
             continue
     print("-" * 40)
 
+def reset_scores():
+    """Reset process scores every 30 seconds."""
+    global last_score_reset_time
+    if time.time() - last_score_reset_time > 30:
+        process_scores.clear()
+        print("[*] Process scores reset.")
+        last_score_reset_time = time.time()
+
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--test-mode", action="store_true", help="Run in simulation mode without killing processes.")
@@ -364,7 +400,7 @@ if __name__ == "__main__":
                 service_snapshot = detect_new_services(service_snapshot)
                 last_service_check = time.time()
 
-           
+            reset_scores()  # Reset scores every 30 seconds
             check_high_cpu_usage()
             monitor_network_usage()
             show_top_suspects()
