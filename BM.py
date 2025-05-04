@@ -161,11 +161,11 @@ class FileEventHandler(FileSystemEventHandler):
         if event.is_directory:
             return
 
-        
+        print(f"on move")
         if any(event.dest_path.lower().endswith(ext) for ext in SUSPICIOUS_EXTENSIONS) or is_gibberish(event.dest_path):
             log_alert(f"[!!!] Suspicious file rename to {event.dest_path}")
 
-     
+            print(f"[!!!] Suspicious file rename to {event.dest_path}")
             for proc in psutil.process_iter(['pid', 'name']):
                 try:
                     pid = proc.info['pid']
