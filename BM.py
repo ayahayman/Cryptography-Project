@@ -1,4 +1,5 @@
 import argparse
+import re
 import time
 import psutil
 from watchdog.observers import Observer
@@ -8,16 +9,18 @@ import math
 import os
 import stat
 import platform
+import subprocess
 
 # === Settings ===
 SUSPICIOUS_EXTENSIONS = ['.locked', '.encrypted', '.payforunlock', '.enc']
 COMPRESSED_EXTENSIONS = ['.zip', '.rar', '.7z', '.tar', '.gz']
+SUSPICIOUS_FOLDERS = ['temp', 'appdata', 'downloads']
 
 if platform.system() == "Windows":
     WHITELISTED_PROCESSES = [
         'explorer.exe', 'System Idle Process', 'System', 'svchost.exe', 'csrss.exe',
         'wininit.exe', 'smss.exe', 'lsass.exe', 'services.exe', 'taskhostw.exe',
-        'SearchIndexer.exe', 'OneDrive.exe', 'chrome.exe', 'python.exe', 'pythonw.exe'
+        'SearchIndexer.exe', 'OneDrive.exe', 'chrome.exe', 
     ]
     CRITICAL_PATHS = [
         "C:\\Windows\\System32",
@@ -25,9 +28,9 @@ if platform.system() == "Windows":
         "C:\\Program Files",
         os.path.expandvars("%APPDATA%")
     ]
-    DEFAULT_PATH = "D:\\Ziad\\university\\Year 4\\security\\project"
+    DEFAULT_PATH = "C:\\TestFolder"
 else:
-    WHITELISTED_PROCESSES = ['launchd', 'WindowServer', 'kernel_task', 'loginwindow', 'python3', 'python3.12']
+    WHITELISTED_PROCESSES = ['launchd', 'WindowServer', 'kernel_task', 'loginwindow']
     CRITICAL_PATHS = [
         "/System/Library",
         "/Library",
@@ -42,12 +45,13 @@ MASS_FILE_CREATE_THRESHOLD = 30
 BIG_SCORE_FOR_MASS_WRITE = 5
 MASS_FILE_DELETION_THRESHOLD = 30
 BIG_SCORE_FOR_MASS_DELETION = 5
-OUTBOUND_NETWORK_SPIKE = 100_000_000  # 50 MB
+OUTBOUND_NETWORK_SPIKE = 100_0000 
 
 test_mode = False
 
 # === Globals ===
 process_scores = defaultdict(int)
+process_safe_creation = defaultdict(lambda: True)
 process_file_create_counter = defaultdict(int)
 process_deletion_counter = defaultdict(int)
 process_net_usage = defaultdict(lambda: {'sent': 0, 'recv': 0})
@@ -73,6 +77,8 @@ def log_alert(message):
         log.write(f"{time.ctime()}: {message}\n")
 
 def check_score_threshold(pid, name):
+    if process_safe_creation[pid]:  
+        return
     if process_scores[pid] >= SCORE_THRESHOLD:
         msg = f"[!!!] ALERT: {name} (PID {pid}) flagged! Score = {process_scores[pid]}"
         print(msg)
@@ -80,9 +86,13 @@ def check_score_threshold(pid, name):
         if not test_mode:
             try:
                 psutil.Process(pid).kill()
-                print(f"[!!!] Killed process {name} (PID {pid})")
             except Exception:
                 pass
+            
+def is_gibberish(name):
+    base = os.path.basename(name).split('.')[0]
+    return bool(re.fullmatch(r'[a-zA-Z0-9]{8,}', base))
+
 
 def check_critical_path_access(path, pid, name):
     if any(path.startswith(p) for p in CRITICAL_PATHS):
@@ -110,9 +120,11 @@ class FileEventHandler(FileSystemEventHandler):
                 if is_hidden:
                     print(f"[!!!] Hidden file created by {name} (PID {pid})")
                     process_scores[pid] += 4
+                    process_safe_creation[pid] = False  
                 if suspicious_ext:
                     print(f"[!!!] Suspicious file extension detected by {name} (PID {pid})")
                     process_scores[pid] += 4
+                    process_safe_creation[pid] = False  
                 if entropy > 7.5:
                     if compressed_ext:
                         print(f"[!] High entropy compressed file by {name} (PID {pid})")
@@ -120,6 +132,7 @@ class FileEventHandler(FileSystemEventHandler):
                     else:
                         print(f"[!!!] High entropy encrypted file by {name} (PID {pid})")
                         process_scores[pid] += 3
+                        process_safe_creation[pid] = False  
 
                 check_score_threshold(pid, name)
                 break
@@ -143,6 +156,32 @@ class FileEventHandler(FileSystemEventHandler):
             except Exception:
                 continue
         self.check_mass_deletions()
+        
+    def on_moved(self, event):
+        if event.is_directory:
+            return
+
+        
+        if any(event.dest_path.lower().endswith(ext) for ext in SUSPICIOUS_EXTENSIONS) or is_gibberish(event.dest_path):
+            log_alert(f"[!!!] Suspicious file rename to {event.dest_path}")
+
+     
+            for proc in psutil.process_iter(['pid', 'name']):
+                try:
+                    pid = proc.info['pid']
+                    name = proc.info['name']
+
+                    if name in WHITELISTED_PROCESSES:
+                        continue
+
+                  
+                    process_scores[pid] += 4
+                    process_safe_creation[pid] = False  # Mark as unsafe
+                    check_score_threshold(pid, name)
+                    break  
+                except Exception:
+                    continue
+
 
     def check_mass_file_creation(self):
         global last_mass_check_time
@@ -171,6 +210,7 @@ def check_high_cpu_usage():
         try:
             if proc.info['name'] in WHITELISTED_PROCESSES:
                 continue
+            check_suspicious_exec_path(proc)
             cpu = proc.cpu_percent(interval=0.1)
             if cpu > CPU_USAGE_THRESHOLD + 20:
                 process_scores[proc.pid] += 4
@@ -186,12 +226,66 @@ def monitor_network_usage():
         try:
             if proc.info['name'] in WHITELISTED_PROCESSES:
                 continue
-            io = proc.io_counters()
-            if io.write_bytes > OUTBOUND_NETWORK_SPIKE:  # Use write_bytes on Windows
-                print(f"[!!!] High outbound traffic from {proc.info['name']} (PID {proc.pid})")
+            check_suspicious_exec_path(proc)
+            net = proc.net_io_counters()
+            if net and net.bytes_sent > OUTBOUND_NETWORK_SPIKE:
+                print(f"[!!!] High outbound traffic from {proc.info['name']} (PID {proc.pid}) - Sent: {net.bytes_sent} bytes")
                 process_scores[proc.pid] += 8
+                check_score_threshold(proc.pid, proc.info['name'])
         except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
             continue
+        
+def check_suspicious_exec_path(proc):
+    try:
+        path = proc.exe().lower()
+        if any(folder in path for folder in SUSPICIOUS_FOLDERS):
+            msg = f"[!!!] Process running from suspicious path: {path}"
+            log_alert(msg)
+            process_scores[proc.pid] += 3
+            check_score_threshold(proc.pid, proc.name())
+    except Exception:
+        pass
+    
+def detect_new_services(existing_services):
+    try:
+        output = subprocess.check_output(
+            "wmic service get Name,PathName,StartMode", shell=True
+        ).decode()
+        lines = output.strip().split("\n")[1:]
+        current_services = set()
+        new_suspicious = []
+
+        for line in lines:
+            parts = line.strip().split(None, 2)
+            if len(parts) < 2:
+                continue
+            name, path = parts[0], parts[1]
+            current_services.add(name)
+
+            if name not in existing_services:
+                if any(k in path.lower() for k in ['ransom', 'encrypt', 'crypto']):
+                    log_alert(f"[!!!] Suspicious service created: {name} -> {path}")
+                    new_suspicious.append(path)
+
+        # Try to find matching process and score it
+        for proc in psutil.process_iter(['pid', 'name', 'exe']):
+            try:
+                if proc.info['exe'] and any(sus.lower() in proc.info['exe'].lower() for sus in new_suspicious):
+                    process_scores[proc.pid] += 5
+                    log_alert(f"[!] Linked suspicious service to process: {proc.info['name']} (PID {proc.pid})")
+                    check_score_threshold(proc.pid, proc.info['name'])
+            except Exception:
+                continue
+
+        return current_services
+    except Exception as e:
+        log_alert(f"[ERROR] Service scan failed: {e}")
+        return existing_services
+
+def list_services():
+    output = subprocess.check_output("wmic service get Name,DisplayName", shell=True).decode()
+    return set(line.strip() for line in output.split("\n")[1:] if line.strip())
+
 def show_top_suspects():
     top = sorted(process_scores.items(), key=lambda x: x[1], reverse=True)[:5]
     print("\n[Live Dashboard] Top Suspicious Processes:")
@@ -208,6 +302,7 @@ if __name__ == "__main__":
     parser.add_argument("--test-mode", action="store_true", help="Run in simulation mode without killing processes.")
     args = parser.parse_args()
     test_mode = args.test_mode
+    service_snapshot = list_services() 
 
     os.makedirs(DEFAULT_PATH, exist_ok=True)
     event_handler = FileEventHandler()
@@ -218,6 +313,11 @@ if __name__ == "__main__":
     print("[*] Behavioral Monitor Started. Test mode =", test_mode)
     try:
         while True:
+            if time.time() - last_service_check > 30:
+                service_snapshot = detect_new_services(service_snapshot)
+                last_service_check = time.time()
+
+           
             check_high_cpu_usage()
             monitor_network_usage()
             show_top_suspects()
@@ -225,3 +325,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         observer.stop()
     observer.join()
+
