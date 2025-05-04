@@ -30,7 +30,7 @@ if platform.system() == "Windows":
         "C:\\Program Files",
         os.path.expandvars("%APPDATA%")
     ]
-    DEFAULT_PATH = "C:\\TestFolder"
+    DEFAULT_PATH = "C:\\Users\\vm\\Desktop"
 else:
     WHITELISTED_PROCESSES = ['launchd', 'WindowServer', 'kernel_task', 'loginwindow']
     CRITICAL_PATHS = [
@@ -42,7 +42,7 @@ else:
     DEFAULT_PATH = os.path.expanduser("~/Desktop/security_project/testFolder")
 
 CPU_USAGE_THRESHOLD = 50
-SCORE_THRESHOLD = 100  # More strict
+SCORE_THRESHOLD = 800  # More strict
 MASS_FILE_CREATE_THRESHOLD = 30
 BIG_SCORE_FOR_MASS_WRITE =1
 MASS_FILE_DELETION_THRESHOLD = 15
@@ -110,7 +110,7 @@ def check_score_threshold(pid, name):
                 psutil.Process(pid).kill()
             except Exception:
                 print(f"[!!!] Failed to kill process {name} (PID {pid}).")
-                show_image_alert(pid, "/Users/maryamhabeb/Desktop/security_project/Cryptography-Project/img.JPG")  # Show image alert
+                show_image_alert(pid, "C:\\Program Files\\Oracle\\security\\img.JPG")  # Show image alert
 
 def is_gibberish(name):
     base = os.path.basename(name).split('.')[0]
