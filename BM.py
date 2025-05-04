@@ -44,10 +44,13 @@ else:
 CPU_USAGE_THRESHOLD = 50
 SCORE_THRESHOLD = 800  # More strict
 MASS_FILE_CREATE_THRESHOLD = 30
-BIG_SCORE_FOR_MASS_WRITE =1
+MASS_MODIFICATION_THRESHOLD = 15
+BIG_SCORE_FOR_MASS_WRITE = 1
 MASS_FILE_DELETION_THRESHOLD = 15
 BIG_SCORE_FOR_MASS_DELETION = 20
 OUTBOUND_NETWORK_SPIKE = 100_0000 
+BIG_SCORE_FOR_MODIFICATION = 10
+
 
 test_mode = False
 
@@ -59,6 +62,7 @@ process_deletion_counter = defaultdict(int)
 process_net_usage = defaultdict(lambda: {'sent': 0, 'recv': 0})
 last_mass_check_time = time.time()
 deletion_check_time = time.time()
+modification_check_time = time.time()
 recently_created_files = set()  # Track recently created files
 last_score_reset_time = time.time()  # Track the last score reset time
 alerted_processes = set()  # Track processes that have already triggered an alert
@@ -214,7 +218,7 @@ class FileEventHandler(FileSystemEventHandler):
         if event.is_directory:
             return  
 
-     
+        # Skip if the file was recently created
         if event.src_path in recently_created_files:
             recently_created_files.remove(event.src_path) 
             return
@@ -232,15 +236,25 @@ class FileEventHandler(FileSystemEventHandler):
                 if name in WHITELISTED_PROCESSES:
                     continue
                 process_scores[pid] += 1 
-                if entropy > 5:
+                if entropy > 2:
                     print(f"[!!!] High entropy modification detected in {event.src_path} by {name} (PID {pid})")
                     process_scores[pid] += 5  
                     process_safe_creation[pid] = False  
                     check_score_threshold(pid, name)
-                   
+                if entropy > 4:
+                    print(f"[!!!] Very high entropy modification detected in {event.src_path} by {name} (PID {pid})")
+                    process_scores[pid] += 10
+                    process_safe_creation[pid] = False  
+                    check_score_threshold(pid, name)
+                if entropy > 5:
+                    print(f"[!!!] Very high entropy modification detected in {event.src_path} by {name} (PID {pid})")
+                    process_scores[pid] += 15
+                    process_safe_creation[pid] = False  
+                    check_score_threshold(pid, name)
                 break
             except Exception:
                 continue
+        self.check_mass_modifications()
 
     def check_mass_file_creation(self):
         global last_mass_check_time
@@ -264,6 +278,22 @@ class FileEventHandler(FileSystemEventHandler):
         if time.time() - deletion_check_time > 60:
             process_deletion_counter.clear()
             deletion_check_time = time.time()
+            
+    def check_mass_modifications(self):
+        global modification_check_time
+        for pid, count in process_deletion_counter.items():
+            if count > MASS_MODIFICATION_THRESHOLD:
+                print(f"[!!!] Mass MODIFICATION: PID {pid} MODIFIED {count} files!")
+                process_scores[pid] += BIG_SCORE_FOR_MODIFICATION
+                process_safe_creation[pid] = False
+                check_score_threshold(pid, psutil.Process(pid).name())
+        if time.time() - modification_check_time > 60:
+            process_deletion_counter.clear()
+            modification_check_time = time.time()
+            
+            
+            
+            
 
 def check_high_cpu_usage():
     for proc in psutil.process_iter(['pid', 'name']):
