@@ -44,9 +44,9 @@ else:
 CPU_USAGE_THRESHOLD = 50
 SCORE_THRESHOLD = 100  # More strict
 MASS_FILE_CREATE_THRESHOLD = 30
-BIG_SCORE_FOR_MASS_WRITE = 5
-MASS_FILE_DELETION_THRESHOLD = 30
-BIG_SCORE_FOR_MASS_DELETION = 5
+BIG_SCORE_FOR_MASS_WRITE =1
+MASS_FILE_DELETION_THRESHOLD = 15
+BIG_SCORE_FOR_MASS_DELETION = 20
 OUTBOUND_NETWORK_SPIKE = 100_0000 
 
 test_mode = False
@@ -143,18 +143,22 @@ class FileEventHandler(FileSystemEventHandler):
                 if is_hidden:
                     print(f"[!!!] Hidden file created by {name} (PID {pid})")
                     process_scores[pid] += 4
-                    process_safe_creation[pid] = False  
+                    #process_safe_creation[pid] = False  
                 if suspicious_ext:
                     print(f"[!!!] Suspicious file extension detected by {name} (PID {pid})")
+                    process_scores[pid] += 10
+                    process_safe_creation[pid] = False 
+                if entropy > 4:
+                    print(f"[!] High entropy file created by {name} (PID {pid})")
                     process_scores[pid] += 4
-                    process_safe_creation[pid] = False  
-                if entropy > 7.5:
+                  
+                if entropy > 6:
                     if compressed_ext:
                         print(f"[!] High entropy compressed file by {name} (PID {pid})")
                         process_scores[pid] += 1
                     else:
                         print(f"[!!!] High entropy encrypted file by {name} (PID {pid})")
-                        process_scores[pid] += 3
+                        process_scores[pid] += 10
                         process_safe_creation[pid] = False  
 
                 check_score_threshold(pid, name)
@@ -172,7 +176,7 @@ class FileEventHandler(FileSystemEventHandler):
                     continue
                 pid = proc.info['pid']
                 name = proc.info['name']
-                process_deletion_counter[pid] += 1
+                process_deletion_counter[pid] += 3
                 check_critical_path_access(event.src_path, pid, name)
                 print(f"[!] File deleted by {name} (PID {pid})")
                 check_score_threshold(pid, name)
@@ -199,7 +203,7 @@ class FileEventHandler(FileSystemEventHandler):
                         continue
 
                   
-                    process_scores[pid] += 4
+                    process_scores[pid] += 1
                     process_safe_creation[pid] = False  
                     check_score_threshold(pid, name)
                     break  
@@ -227,7 +231,7 @@ class FileEventHandler(FileSystemEventHandler):
                 
                 if name in WHITELISTED_PROCESSES:
                     continue
-
+                process_scores[pid] += 1 
                 if entropy > 5:
                     print(f"[!!!] High entropy modification detected in {event.src_path} by {name} (PID {pid})")
                     process_scores[pid] += 5  
@@ -255,6 +259,7 @@ class FileEventHandler(FileSystemEventHandler):
             if count > MASS_FILE_DELETION_THRESHOLD:
                 print(f"[!!!] Mass deletion: PID {pid} deleted {count} files!")
                 process_scores[pid] += BIG_SCORE_FOR_MASS_DELETION
+                process_safe_creation[pid] = False
                 check_score_threshold(pid, psutil.Process(pid).name())
         if time.time() - deletion_check_time > 60:
             process_deletion_counter.clear()
