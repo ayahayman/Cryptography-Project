@@ -41,7 +41,7 @@ else:
     ]
     DEFAULT_PATH = os.path.expanduser("~/Desktop/security_project/testFolder")
 
-CPU_USAGE_THRESHOLD = 50
+CPU_USAGE_THRESHOLD = 15
 SCORE_THRESHOLD = 800  # More strict
 MASS_FILE_CREATE_THRESHOLD = 30
 MASS_MODIFICATION_THRESHOLD = 15
@@ -238,23 +238,29 @@ class FileEventHandler(FileSystemEventHandler):
                 process_scores[pid] += 1 
                 if entropy > 2:
                     print(f"[!!!] High entropy modification detected in {event.src_path} by {name} (PID {pid})")
-                    process_scores[pid] += 5  
+                    process_scores[pid] += 1  
                     process_safe_creation[pid] = False  
-                    check_score_threshold(pid, name)
+                    # check_score_threshold(pid, name)
                 if entropy > 4:
                     print(f"[!!!] Very high entropy modification detected in {event.src_path} by {name} (PID {pid})")
-                    process_scores[pid] += 10
+                    process_scores[pid] += 4
                     process_safe_creation[pid] = False  
-                    check_score_threshold(pid, name)
+                    # check_score_threshold(pid, name)
                 if entropy > 5:
                     print(f"[!!!] Very high entropy modification detected in {event.src_path} by {name} (PID {pid})")
                     process_scores[pid] += 15
                     process_safe_creation[pid] = False  
-                    check_score_threshold(pid, name)
+                    # check_score_threshold(pid, name)
+                if entropy > 7.5:
+                    print(f"[!!!] Very high entropy modification detected in {event.src_path} by {name} (PID {pid})")
+                    process_scores[pid] += 20
+                    process_safe_creation[pid] = False  
+                    # check_score_threshold(pid, name)
+                check_score_threshold(pid, name)
                 break
             except Exception:
                 continue
-        self.check_mass_modifications()
+        #self.check_mass_modifications()
 
     def check_mass_file_creation(self):
         global last_mass_check_time
@@ -293,20 +299,71 @@ class FileEventHandler(FileSystemEventHandler):
             
             
             
+       # Add to your settings section
+RAM_USAGE_THRESHOLD = 80  # Percentage threshold for high RAM usage
+RAM_SPIKE_THRESHOLD = 20  # Percentage increase considered a spike
+PROCESS_RAM_THRESHOLD = 1024  # MB threshold for individual process RAM usage
+process_ram_history = defaultdict(list)  # Track process RAM usage history
+
+def check_ram_usage():
+    """Check system and process RAM usage for suspicious patterns."""
+    # Check overall system RAM usage
+    total_ram = psutil.virtual_memory().percent
+    if total_ram > RAM_USAGE_THRESHOLD:
+        print(f"[!] High system RAM usage: {total_ram}%")
+    
+    # Check individual processes
+    for proc in psutil.process_iter(['pid', 'name', 'memory_info']):
+        try:
+            if proc.info['name'] in WHITELISTED_PROCESSES:
+                continue
+                
+            pid = proc.info['pid']
+            name = proc.info['name']
+            mem_info = proc.info['memory_info']
+            ram_usage_mb = mem_info.rss / (1024 * 1024)  # Convert to MB
             
+            # Track RAM history for spike detection
+            process_ram_history[pid].append(ram_usage_mb)
+            if len(process_ram_history[pid]) > 5:  # Keep last 5 readings
+                process_ram_history[pid] = process_ram_history[pid][-5:]
+                
+            # Check for absolute RAM usage
+            if ram_usage_mb > PROCESS_RAM_THRESHOLD:
+                print(f"[!] High RAM usage by {name} (PID {pid}): {ram_usage_mb:.2f} MB")
+                process_scores[pid] += 5
+                
+            # Check for sudden spikes in RAM usage
+            if len(process_ram_history[pid]) >= 3:
+                avg_prev = sum(process_ram_history[pid][:-1]) / (len(process_ram_history[pid]) - 1)
+                current = process_ram_history[pid][-1]
+                if avg_prev > 0 and ((current - avg_prev) / avg_prev * 100) > RAM_SPIKE_THRESHOLD:
+                    print(f"[!!!] RAM usage spike by {name} (PID {pid}): "
+                          f"{avg_prev:.2f} MB -> {current:.2f} MB (+{(current-avg_prev)/avg_prev*100:.1f}%)")
+                    process_scores[pid] += 8
+                    
+            check_score_threshold(pid, name)
+            
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue     
 
 def check_high_cpu_usage():
+    print("$$$$$$$$$$$$$$ CPU Usage $$$$$$$$$$$$$$$$$$")
     for proc in psutil.process_iter(['pid', 'name']):
         try:
             if proc.info['name'] in WHITELISTED_PROCESSES:
                 continue
             check_suspicious_exec_path(proc)
             cpu = proc.cpu_percent(interval=0.1)
+            print(proc.info['name'] +'has cpu usage of: ' +cpu )
             if cpu > CPU_USAGE_THRESHOLD + 20:
+                print("$$$$$$$$ HIGH")
                 process_scores[proc.pid] += 4
             elif cpu > CPU_USAGE_THRESHOLD + 10:
+                print("$$$$$$$$ MEDIUM")
                 process_scores[proc.pid] += 3
             elif cpu > CPU_USAGE_THRESHOLD:
+                print("$$$$$$$$ LOW")
                 process_scores[proc.pid] += 2
         except Exception:
             continue
@@ -438,7 +495,9 @@ if __name__ == "__main__":
             reset_scores()  # Reset scores every 30 seconds
             check_high_cpu_usage()
             monitor_network_usage()
+            check_ram_usage()
             show_top_suspects()
+            
             time.sleep(5)
     except KeyboardInterrupt:
         observer.stop()
