@@ -57,6 +57,7 @@ process_deletion_counter = defaultdict(int)
 process_net_usage = defaultdict(lambda: {'sent': 0, 'recv': 0})
 last_mass_check_time = time.time()
 deletion_check_time = time.time()
+recently_created_files = set()  # Track recently created files
 
 def calculate_entropy(file_path):
     try:
@@ -140,6 +141,7 @@ class FileEventHandler(FileSystemEventHandler):
                 continue
 
         self.check_mass_file_creation()
+        recently_created_files.add(event.src_path)  # Mark file as recently created
 
     def on_deleted(self, event):
         for proc in psutil.process_iter(['pid', 'name']):
@@ -186,8 +188,9 @@ class FileEventHandler(FileSystemEventHandler):
         if event.is_directory:
             return  
 
-
-        if event.src_path in process_file_create_counter or event.src_path in process_deletion_counter:
+        # Skip if the file was recently created
+        if event.src_path in recently_created_files:
+            recently_created_files.remove(event.src_path)  # Remove from recently created
             return
 
         print(f"[!] File modified: {event.src_path}")
