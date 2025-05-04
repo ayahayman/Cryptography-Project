@@ -182,6 +182,32 @@ class FileEventHandler(FileSystemEventHandler):
                 except Exception:
                     continue
 
+    def on_modified(self, event):
+        if event.is_directory:
+            return  
+
+
+        if event.src_path in process_file_create_counter or event.src_path in process_deletion_counter:
+            return
+
+        print(f"[!] File modified: {event.src_path}")
+        entropy = calculate_entropy(event.src_path)
+        print(f"[*] Entropy of modified file {event.src_path}: {entropy:.2f}")
+
+        for proc in psutil.process_iter(['pid', 'name']):
+            try:
+                pid = proc.info['pid']
+                name = proc.info['name']
+                if name in WHITELISTED_PROCESSES:
+                    continue
+
+                if entropy > 5:
+                    print(f"[!!!] High entropy modification detected in {event.src_path} by {name} (PID {pid})")
+                    process_scores[pid] += 5  # Higher score for high-entropy modifications
+                    check_score_threshold(pid, name)
+                break
+            except Exception:
+                continue
 
     def check_mass_file_creation(self):
         global last_mass_check_time
@@ -246,45 +272,63 @@ def check_suspicious_exec_path(proc):
     except Exception:
         pass
     
+def list_services():
+    try:
+        if platform.system() == "Windows":
+            output = subprocess.check_output("wmic service get Name,DisplayName", shell=True).decode()
+            return set(line.strip() for line in output.split("\n")[1:] if line.strip())
+        else:
+            output = subprocess.check_output("launchctl list", shell=True).decode()  # macOS
+            return set(line.split()[0] for line in output.split("\n")[1:] if line.strip())
+    except Exception as e:
+        print(f"[ERROR] Failed to list services: {e}")
+        return set()
+last_service_check = 0
 def detect_new_services(existing_services):
     try:
-        output = subprocess.check_output(
-            "wmic service get Name,PathName,StartMode", shell=True
-        ).decode()
-        lines = output.strip().split("\n")[1:]
-        current_services = set()
-        new_suspicious = []
+        if platform.system() == "Windows":
+            output = subprocess.check_output(
+                "wmic service get Name,PathName,StartMode", shell=True
+            ).decode()
+            lines = output.strip().split("\n")[1:]
+            current_services = set()
+            new_suspicious = []
 
-        for line in lines:
-            parts = line.strip().split(None, 2)
-            if len(parts) < 2:
-                continue
-            name, path = parts[0], parts[1]
-            current_services.add(name)
+            for line in lines:
+                parts = line.strip().split(None, 2)
+                if len(parts) < 2:
+                    continue
+                name, path = parts[0], parts[1]
+                current_services.add(name)
 
-            if name not in existing_services:
-                if any(k in path.lower() for k in ['ransom', 'encrypt', 'crypto']):
-                    log_alert(f"[!!!] Suspicious service created: {name} -> {path}")
-                    new_suspicious.append(path)
+                if name not in existing_services:
+                    if any(k in path.lower() for k in ['ransom', 'encrypt', 'crypto']):
+                        log_alert(f"[!!!] Suspicious service created: {name} -> {path}")
+                        new_suspicious.append(path)
 
-        # Try to find matching process and score it
-        for proc in psutil.process_iter(['pid', 'name', 'exe']):
-            try:
-                if proc.info['exe'] and any(sus.lower() in proc.info['exe'].lower() for sus in new_suspicious):
-                    process_scores[proc.pid] += 5
-                    log_alert(f"[!] Linked suspicious service to process: {proc.info['name']} (PID {proc.pid})")
-                    check_score_threshold(proc.pid, proc.info['name'])
-            except Exception:
-                continue
+            # Try to find matching process and score it
+            for proc in psutil.process_iter(['pid', 'name', 'exe']):
+                try:
+                    if proc.info['exe'] and any(sus.lower() in proc.info['exe'].lower() for sus in new_suspicious):
+                        process_scores[proc.pid] += 5
+                        log_alert(f"[!] Linked suspicious service to process: {proc.info['name']} (PID {proc.pid})")
+                        check_score_threshold(proc.pid, proc.info['name'])
+                except Exception:
+                    continue
 
-        return current_services
+            return current_services
+        else:
+            output = subprocess.check_output("launchctl list", shell=True).decode()  # macOS
+            current_services = set(line.split()[0] for line in output.split("\n")[1:] if line.strip())
+            new_services = current_services - existing_services
+
+            for service in new_services:
+                if any(k in service.lower() for k in ['ransom', 'encrypt', 'crypto']):
+                    log_alert(f"[!!!] Suspicious service detected: {service}")
+            return current_services
     except Exception as e:
         log_alert(f"[ERROR] Service scan failed: {e}")
         return existing_services
-
-def list_services():
-    output = subprocess.check_output("wmic service get Name,DisplayName", shell=True).decode()
-    return set(line.strip() for line in output.split("\n")[1:] if line.strip())
 
 def show_top_suspects():
     top = sorted(process_scores.items(), key=lambda x: x[1], reverse=True)[:5]
